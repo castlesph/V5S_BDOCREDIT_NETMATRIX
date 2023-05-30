@@ -1,0 +1,11 @@
+---- mmtsave Matches (10 in 6 files) ----
+DatabaseFunc.c (database):int inMMTSave(int inSeekCnt)
+DatabaseFunc.h (database):int inMMTSave(int inSeekCnt);
+POSHost.c (trans):            inMMTSave(strMMT[0].MMTid);
+POSHost.c (trans):    inMMTSave(strMMT[0].MMTid);
+POSSetting.c (setting):                inMMTSave(strMMT[0].MMTid);
+POSSetting.c (setting):                inMMTSave(strMMT[0].MMTid);
+POSSetting.c (setting):            inMMTSave(strMMT[0].MMTid);
+POSSettlement.c (trans):		inMMTSave(strMMT[0].MMTid);
+POSSettlement.c (trans):		inMMTSave(strMMT[0].MMTid);
+V5IsoFunc.c (iso8583):        inMMTSave(strMMT[0].MMTid);

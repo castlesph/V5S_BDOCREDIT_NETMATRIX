@@ -1,0 +1,110 @@
+#
+#  There exist several targets which are by default empty and which can be 
+#  used for execution of your targets. These targets are usually executed 
+#  before and after some main targets. They are: 
+#
+#     .build-pre:              called before 'build' target
+#     .build-post:             called after 'build' target
+#     .clean-pre:              called before 'clean' target
+#     .clean-post:             called after 'clean' target
+#     .clobber-pre:            called before 'clobber' target
+#     .clobber-post:           called after 'clobber' target
+#     .all-pre:                called before 'all' target
+#     .all-post:               called after 'all' target
+#     .help-pre:                called before 'help' target
+#     .help-post:               called after 'help' target
+#
+#  Targets beginning with '.' are not intended to be called on their own.
+#
+#  Main targets can be executed directly, and they are:
+#  
+#     build                    build a specific configuration
+#     clean                    remove built files from a configuration
+#     clobber                  remove all built files
+#     all                      build all configurations
+#     help                     print help mesage
+#  
+#  Targets .build-impl, .clean-impl, .clobber-impl, .all-impl, and
+#  .help-impl are implemented in nbproject/makefile-impl.mk.
+#
+# NOCDDL
+
+
+# Environment 
+MKDIR=mkdir
+CP=cp
+CCADMIN=CCadmin
+RANLIB=ranlib
+CAPGEN=CAPGCon
+CAPGENPROD=CAPGConProd
+PRONAME=BDOCREDIT
+APPNAME=V5S_BDOCREDIT
+
+
+# build
+build: .build-pre .build-impl .build-post
+
+.build-pre:
+# Add your pre 'build' code here...
+
+.build-post: .${CONF}-build-post
+
+.${CONF}-build-post: .${CONF}-Make-Cap
+
+
+# Add your post 'build' code here...
+.Debug-Make-Cap:
+# cd ./Dist/V5S/BDOCREDIT/output; CAPGCon V5S_BDOCREDIT 0001 CASTLES 10 ../10V5S_App V5S_BDOCREDIT 0; rm ../*.zip; mv ../*.mci 
+	cd ./Dist/V5S/${PRONAME}; ${CAPGEN} ${APPNAME} 0001 CASTLES 10 ./10V5S_App ${APPNAME} 0; rm -f *.zip; mv *.mci ./output; mv *.CAP ./output
+# cd ./Dist/V5S/BDOCREDIT; /BDO/VEGA_Library/TOOLS/SignerDefault/CAPGCon V5S_BDOCREDIT "0001" "CASTLES" "10" ../10V5S_App V5S_BDOCREDIT 0; rm ../*.zip; mv ../*.mci 
+#	cd ./Dist/V5S/${PRONAME}; ${CAPGEN} ${APPNAME} 0001 CASTLES 10 ./10V5S_App ${APPNAME} 0; rm -f *.zip; mv *.mci ./output; mv *.CAP ./output
+  
+.Device-Make-Cap: 
+	cd ./Dist/V5S/${PRONAME}; ${CAPGEN} ${APPNAME} 0001 CASTLES 10 ./10V5S_App ${APPNAME} 0; rm -f *.zip; mv *.mci ./output; mv *.CAP ./output
+#
+# cd ./Dist/V5S/${PRONAME}; ${CAPGEN} ${APPNAME} 0001 CASTLES 10 ./10V5S_App ${APPNAME} 0; rm -f *.zip; mv *.mci ./output; mv *.CAP ./output
+# cd ./Dist/V5S/BDOCREDIT; ${CAPGENPROD} "0001" "123456" "123456" ${APPNAME} 0100 CASTLES 10 10V5S_App V5S_BDOCREDIT 0; rm -f *.zip; rm -f *.zip; mv *.mci ./output; mv *.CAP ./output
+
+# clean
+clean: .clean-pre .clean-impl .clean-post
+
+.clean-pre:
+# Add your pre 'clean' code here...
+
+.clean-post:
+# Add your post 'clean' code here...
+
+
+# clobber
+clobber: .clobber-pre .clobber-impl .clobber-post
+
+.clobber-pre:
+# Add your pre 'clobber' code here...
+
+.clobber-post:
+# Add your post 'clobber' code here...
+
+
+# all
+all: .all-pre .all-impl .all-post
+
+.all-pre:
+# Add your pre 'all' code here...
+
+.all-post:
+# Add your post 'all' code here...
+
+
+# help
+help: .help-pre .help-impl .help-post
+
+.help-pre:
+# Add your pre 'help' code here...
+
+.help-post:
+# Add your post 'help' code here...
+
+
+
+# include project implementation makefile
+include nbproject/Makefile-impl.mk

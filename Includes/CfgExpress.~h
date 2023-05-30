@@ -1,0 +1,34 @@
+/* 
+ * File:   display.h
+ * Author: 
+ *
+ * Created on 2014
+ */
+
+#ifndef ___CTOS_CFGEXPRESS_H___
+#define	___CTOS_CFGEXPRESS_H___
+
+#ifdef	__cplusplus
+extern "C" {
+#endif
+
+//#define PUBLIC_PATH 				"./home/ap/pub/"
+#define PUBLIC_PATH 				"/home/ap/pub/"
+#define LOCAL_PATH 					"./fs_data/"
+#define DATABASE_FILE_EXT 			".S3DB"
+#define CASTLES_CONFIG_FILE			"parameter.prm"
+
+typedef char DataBaseName[50+1];
+typedef char TableName[50+1];
+typedef char FieldData[50+1];
+typedef char FieldName[50+1];
+typedef char RecordNum[50+1];
+
+int inCTOSS_ProcessCfgExpress(void);
+
+#ifdef	__cplusplus
+}
+#endif
+
+#endif	/* ___CTOS_CFGEXPRESS_H___ */
+

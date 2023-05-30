@@ -1,0 +1,169 @@
+/*******************************************************************************
+
+*******************************************************************************/
+
+#include <string.h>
+#include <stdio.h>
+#include <ctosapi.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <typedef.h>
+
+
+#include "..\Includes\POSTypedef.h"
+
+
+#include "..\Includes\POSMain.h"
+#include "..\Includes\POSTrans.h"
+#include "..\Includes\POSHost.h"
+#include "..\Includes\POSSale.h"
+#include "..\Includes\POSbatch.h"
+#include "..\ui\Display.h"
+#include "..\Includes\V5IsoFunc.h"
+#include "..\Accum\Accum.h"
+#include "..\print\Print.h"
+#include "..\Comm\V5Comm.h"
+#include "..\Includes\MultiApLib.h"
+#include "..\Aptrans\MultiAptrans.h"
+#include "..\POWRFAIL\POSPOWRFAIL.h"
+
+//enhance ecr
+extern BOOL fECRTxnFlg;
+
+/* For ECR -- sidumili */
+extern BOOL fECRBuildSendOK; 
+/* For ECR -- sidumili */
+
+
+int inCTOS_VoidFlowProcess(void)
+{
+    int inRet = d_NO;
+
+	fECRBuildSendOK = FALSE; /* BDO: For ECR -- sidumili */
+    vdCTOS_SetTransType(VOID);
+    
+    //display title
+    vdDispTransTitle(VOID); 
+
+    inRet = inCTOS_GetTxnPassword();
+    if(d_OK != inRet)
+        return inRet;
+		
+    inRet = inCTOS_CheckTranAllowd();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_GeneralGetInvoice();
+    if(d_OK != inRet)
+        return inRet;
+
+    if (inMultiAP_CheckMainAPStatus() == d_OK)
+    {
+        inRet = inCTOS_MultiAPBatchSearch(d_IPC_CMD_VOID_SALE);
+        if(d_OK != inRet)
+            return inRet;
+    }
+    else
+    {
+        if (inMultiAP_CheckSubAPStatus() == d_OK)
+        {
+            inRet = inCTOS_MultiAPGetVoid();
+            if(d_OK != inRet)
+                return inRet;
+        }       
+        inRet = inCTOS_BatchSearch();
+        if(d_OK != inRet)
+            return inRet;
+    }
+
+    inRet = inCTOS_CheckVOID();
+    if(d_OK != inRet)
+        return inRet;
+    
+    inRet = inCTOS_LoadCDTandIIT();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_VoidSelectHostNoPreConnect();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_CheckMustSettle();
+    if(d_OK != inRet)
+        return inRet;
+    
+    inRet = inCTOS_ConfirmInvAmt();
+    if(d_OK != inRet)
+        return inRet;
+
+		inRet=inCTOS_PreConnect();
+    if(d_OK != inRet)
+        return inRet;
+
+
+    inRet = inBuildAndSendIsoData();
+    if(d_OK != inRet)
+        return inRet;
+
+	vdUpdateSMACAmount(); /*BDO: For SMAC which not save the DE04 response due its smac amount balance*/
+		
+    inRet = inCTOS_SaveBatchTxn();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_UpdateAccumTotal();
+    if(d_OK != inRet)
+        return inRet;
+
+	// patrick add code 20141205 start, modified -- sidumili
+	fECRBuildSendOK = TRUE;	
+	if (fECRBuildSendOK){	
+	    inRet = inMultiAP_ECRSendSuccessResponse();
+	}
+	// patrick add code 20141205 start, modified -- sidumili
+
+
+    inRet = ushCTOS_printReceipt();
+    if(d_OK != inRet)
+        return inRet;
+    else
+        vdSetErrorMessage("");
+
+    inCTLOS_Updatepowrfail(PFR_IDLE_STATE);
+
+		if (!srTransRec.byOffline){ 
+			CTOS_LCDTClearDisplay();
+			inRet=inProcessAdviceTrans(&srTransRec, strHDT.inNumAdv);
+    	if(d_OK != inRet)
+        return inRet;
+    	else
+        vdSetErrorMessage("");
+		}
+	
+    return d_OK;
+}
+
+int inCTOS_VOID(void)
+{
+    int inRet = d_NO;
+    
+    CTOS_LCDTClearDisplay();
+
+    
+    vdCTOS_TxnsBeginInit();
+    
+    inRet = inCTOS_VoidFlowProcess();
+	
+	/* Send response to ECR -- sidumili */
+	if (!fECRBuildSendOK){	
+		inMultiAP_ECRSendSuccessResponse();
+	}	
+	fECRBuildSendOK = FALSE;
+	/* Send response to ECR -- sidumili */
+
+    inCTOS_inDisconnect();
+
+    vdCTOS_TransEndReset();
+	
+    return inRet;
+}

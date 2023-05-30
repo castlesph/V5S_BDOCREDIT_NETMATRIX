@@ -1,0 +1,224 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+/** These two files are necessary for calling CTOS API **/
+#include <ctosapi.h>
+#include "../Includes/POSbatch.h"
+#include "../Includes/POSTypedef.h"
+
+#include "../FileModule/myFileFunc.h"
+#include "../POWRFAIL/POSPOWRFAIL.h"
+#include "..\debug\debug.h"
+#include "..\Database\DatabaseFunc.h"
+#include "..\Includes\myEZLib.h"
+#include "..\ui\Display.h"
+#include "..\Includes\POSHost.h"
+#include "..\debug\debug.h"
+#include "../Ctls/POSCtls.h"
+
+/* Issue# 000096: BIN VER Checking - start -- jzg*/
+extern BOOL fBINVer;
+extern char szBINVerSTAN[8];
+/* Issue# 000096: BIN VER Checking - end -- jzg*/
+
+int inCTOS_SaveBatchTxn(void)
+{
+	int inResult ;
+	int inSaveType;
+
+	vdDebug_LogPrintf("inCTOS_SaveBatchTxn");
+	inCTLOS_Updatepowrfail(PFR_BEGIN_BATCH_UPDATE);
+
+	/* Issue# 000096: BIN VER Checking - start -- jzg*/
+	if (fBINVer)
+	{
+		srTransRec.fBINVer = CN_TRUE;
+		strcpy(srTransRec.szBINVerSTAN, szBINVerSTAN);
+	}
+	/* Issue# 000096: BIN VER Checking - end -- jzg*/
+
+	/*Issue# 000299 -- sidumili*/
+	srTransRec.inSavedCurrencyIdx = strCST.inCurrencyIndex;
+
+	/*Saved flag for footer logo -- sidumili*/
+	srTransRec.fFooterLogo = strHDT.fPrintFooterLogo;
+	
+	
+	vdDebug_LogPrintf("inCTOS_SaveBatchTxn byTransType[%d].byOffline[%d].byUploaded[%d]", srTransRec.byTransType, srTransRec.byOffline, srTransRec.byUploaded);
+	if(srTransRec.byTransType == VOID && srTransRec.byOffline == CN_TRUE)
+	{
+		//OFFLINE SALE, then VOID it, the VOID is offline, should delete the OFFLINE SALE Advice
+		if(srTransRec.byUploaded == CN_FALSE)
+		{
+			inCTOSS_DeleteAdviceByINV(srTransRec.szInvoiceNo);
+		}
+	}
+
+	//1102   
+	//if((srTransRec.byTransType == SALE) || (srTransRec.byTransType == REFUND) || (srTransRec.byTransType == SALE_OFFLINE) || (srTransRec.byTransType == PRE_AUTH))
+	if((srTransRec.byTransType == SALE) || (srTransRec.byTransType == REFUND) || (srTransRec.byTransType == SALE_OFFLINE) || (srTransRec.byTransType == PRE_AUTH) || (srTransRec.byTransType == CASH_ADVANCE))
+	//1102
+	{
+		inSaveType = DF_BATCH_APPEND;
+
+		//Should be Online void the Intial SALE amount.
+		if(srTransRec.byOffline == CN_FALSE)
+		{
+			//use szStoreID to store how much amount fill up in DE4 for VOID
+			//either enter tip or not enter tip are ok
+			memcpy(srTransRec.szStoreID, srTransRec.szTotalAmount, 6);
+		}
+	}
+	else
+	{
+		inSaveType = DF_BATCH_UPDATE;
+	}
+
+	if(srTransRec.byTransType == VOID)
+		srTransRec.byVoided = TRUE;
+
+	inResult = inDatabase_BatchSave(&srTransRec, inSaveType);
+
+	if(inResult != ST_SUCCESS)
+	{
+		vdSetErrorMessage("Batch Save Error");
+		return ST_ERROR;
+	}
+
+	if((memcmp(srTransRec.szAuthCode, "Y3",2))  && 
+		(srTransRec.byTransType != SALE_OFFLINE) &&
+		(srTransRec.byTransType != SALE_ADJUST)  &&
+		(srTransRec.byTransType != SALE_TIP) &&		
+	  ( srTransRec.byOffline != VS_TRUE))
+	{
+		inMyFile_ReversalDelete();
+	}
+	
+	if((srTransRec.byTransType == SALE_TIP) || (srTransRec.byTransType == SALE_ADJUST) || (srTransRec.byTransType == SALE_OFFLINE))
+	{
+		//fix send tip adjust advie two times issue
+		inCTOSS_DeleteAdviceByINV(srTransRec.szInvoiceNo);
+		inMyFile_AdviceSave(&srTransRec, srTransRec.byPackType);
+	}
+	//if original txn is offline, then do a online txn piggy back the offline advice, the offline advice been deleted, then void it, the void is offline, need to create advice for this offline void
+	else if(srTransRec.byTransType == VOID && srTransRec.byOffline == CN_TRUE && srTransRec.byUploaded == CN_TRUE)
+	{
+		vdDebug_LogPrintf("Create Advice for offline VOID");
+		//fix send tip adjust advie two times issue
+		inCTOSS_DeleteAdviceByINV(srTransRec.szInvoiceNo);
+		inMyFile_AdviceSave(&srTransRec, OFFLINE_VOID);
+	}
+	//    else if((srTransRec.byTransType == SALE) && (srTransRec.byEntryMode == CARD_ENTRY_ICC))
+	else if (((srTransRec.byEntryMode == CARD_ENTRY_ICC) ||
+		/* EMV: Revised EMV details printing - start -- jzg */
+		(srTransRec.bWaveSID == d_VW_SID_JCB_WAVE_QVSDC) ||
+		(srTransRec.bWaveSID == d_VW_SID_AE_EMV) ||
+		(srTransRec.bWaveSID == d_VW_SID_CUP_EMV) ||
+		(srTransRec.bWaveSID == d_VW_SID_PAYPASS_MCHIP) ||
+		(srTransRec.bWaveSID == d_VW_SID_JCB_WAVE_2) ||
+		(srTransRec.bWaveSID == d_VW_SID_VISA_WAVE_QVSDC)) && (srTransRec.byTransType == SALE))
+		/* EMV: Revised EMV details printing - end -- jzg */ // patrick fix contactless 20140828
+	{
+		if((srTransRec.byTCuploaded == 0) ||
+			(!memcmp(srTransRec.szAuthCode, "Y1",2)) || 
+			(!memcmp(srTransRec.szAuthCode, "Y3",2)))
+		{
+			if((memcmp(srTransRec.szAuthCode, "Y1",2)) && 
+			(memcmp(srTransRec.szAuthCode, "Y3",2)))
+			{
+				vdDebug_LogPrintf("Create Advice - TC UPLOAD");
+				srTransRec.byPackType = TC_UPLOAD;
+				inMyFile_TCUploadFileSave(&srTransRec, srTransRec.byPackType);
+			}
+			else
+			{
+				vdDebug_LogPrintf("Create Advice - OFFLINE");
+				srTransRec.byPackType = SEND_ADVICE;
+				inMyFile_AdviceSave(&srTransRec, srTransRec.byPackType);
+			}
+		}
+	}
+//issue-00369- add tc upload in cash advance
+	else if((srTransRec.byTransType == REFUND || srTransRec.byTransType == PRE_AUTH || srTransRec.byTransType == CASH_ADVANCE) && (srTransRec.byEntryMode == CARD_ENTRY_ICC))
+	{
+		srTransRec.byPackType = TC_UPLOAD;
+		inMyFile_TCUploadFileSave(&srTransRec, srTransRec.byPackType);
+	}
+
+	return d_OK;
+}
+
+
+
+/* BDO: Removed CARD VER from batch review - start -- jzg */
+int inCTOS_BatchReviewFlow(void)
+{
+	int inResult = d_OK;
+	int inCount = 0;
+	int inBatchRecordNum = 0;
+	BYTE key = 0;
+	int  *pinTransDataid = NULL;
+
+	inBatchRecordNum = inBatchReviewNumRecord();
+
+	pinTransDataid = (int*)malloc(inBatchRecordNum * sizeof(int));
+
+	inBatchReviewByMerchandHost(inBatchRecordNum, srTransRec.HDTid, srTransRec.MITid, srTransRec.szBatchNo, pinTransDataid);
+
+	inResult = inDatabase_BatchReadByTransId(&srTransRec, pinTransDataid[inCount]);
+
+	if(inResult == d_NO)
+	{
+		vdDisplayErrorMsg(1, 8, "BATCH EMPTY");
+		free(pinTransDataid);
+		return d_OK;
+	}
+
+	inCTOS_DisplayBatchRecordDetail(BATCH_REVIEW);
+
+	while(1)
+	{ 
+		CTOS_KBDHit(&key); 
+		if(key == d_KBD_CANCEL) 
+		{ 
+			free(pinTransDataid);
+			return; 
+		} 
+		else if((key == d_KBD_DOWN)||(key == d_KBD_DOT))
+		{
+			inCount++;     
+			DebugAddIntX("inCount", inCount);
+
+			if(inCount >= inBatchRecordNum)
+			{
+				vdDisplayErrorMsg(1, 8, "END OF RECORD");
+				inCount = 0;			  		  			  
+			}
+
+			inResult = inDatabase_BatchReadByTransId(&srTransRec, pinTransDataid[inCount]);
+			inCTOS_DisplayBatchRecordDetail(BATCH_REVIEW);	
+		} 
+		else if((key == d_KBD_UP)||(key == d_KBD_00))
+		{ 
+			inCount--;
+
+			inResult = inDatabase_BatchReadByTransId(&srTransRec, pinTransDataid[inCount]);
+
+			if(inResult == d_NO)
+			{
+				vdDisplayErrorMsg(1, 8, "FIRST OF RECORD");
+				inCount = 0;	  
+				inResult = inDatabase_BatchReadByTransId(&srTransRec, pinTransDataid[inCount]);
+			}
+
+			inCTOS_DisplayBatchRecordDetail(BATCH_REVIEW);
+		} 
+	} 	
+
+	free(pinTransDataid);
+	return d_OK;
+
+}
+/* BDO: Removed CARD VER from batch review - end -- jzg */
+
+

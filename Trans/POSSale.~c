@@ -1,0 +1,430 @@
+/*******************************************************************************
+
+*******************************************************************************/
+
+#include <string.h>
+#include <stdio.h>
+#include <ctosapi.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <typedef.h>
+#include <EMVAPLib.h>
+#include <EMVLib.h>
+
+#include "..\Includes\POSTypedef.h"
+#include "..\Debug\Debug.h"
+
+#include "..\Includes\POSMain.h"
+#include "..\Includes\POSTrans.h"
+#include "..\Includes\POSHost.h"
+#include "..\Includes\POSSale.h"
+#include "..\Includes\POSbatch.h"
+#include "..\ui\Display.h"
+#include "..\Includes\V5IsoFunc.h"
+#include "..\Accum\Accum.h"
+#include "..\print\Print.h"
+#include "..\Comm\V5Comm.h"
+#include "..\Includes\MultiApLib.h"
+#include "..\Aptrans\MultiAptrans.h"
+#include "..\POWRFAIL\POSPOWRFAIL.h"
+
+
+//gcitra
+#include "..\Includes\CTOSInput.h"
+#include "..\Includes\ISOEnginee.h"
+//gcitra
+
+
+/* BDO: Last 4 PAN digit checking - start -- jzg */
+extern int inBDOEnterLast4Digits(BOOL fInstallment);
+
+
+
+extern int inCTOS_CashierLoyalty(void);
+
+extern BOOL fECRBuildSendOK;
+extern BOOL fTimeOutFlag; /*BDO: Flag for timeout --sidumili*/
+int inCTOS_SaleFlowProcess(void)
+{
+    int inRet = d_NO;
+
+    USHORT ushEMVtagLen;
+    BYTE   EMVtagVal[64];
+    BYTE   szStr[64];
+
+    vdCTOS_SetTransType(SALE);
+    
+    //display title
+    vdDispTransTitle(SALE);
+		
+		srTransRec.fVoidOffline = CN_FALSE;
+    
+    inRet = inCTOSS_CheckMemoryStatus();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_GetTxnPassword();
+    if(d_OK != inRet)
+        return inRet;
+
+	inRet = inCTOS_TEMPCheckAndSelectMutipleMID();
+	if(d_OK != inRet)
+		return inRet;
+
+//gcitra
+    inRet = inCTOS_GetTxnBaseAmount();
+    if(d_OK != inRet)
+        return inRet;
+
+/*    inRet = inCTOS_GetTxnTipAmount();
+    if(d_OK != inRet)
+        return inRet;
+*/
+
+
+    //remove - BDO does not require display and Floor limit cheking is not applicable to BDO (Except for EMV) 
+	//inRet = inCTOS_CustComputeAndDispTotal();
+	//if(d_OK != inRet)
+	//	return inRet;
+//gcitra
+	
+    inRet = inCTOS_GetCardFields(); 
+    //inRet = inCTOS_WaveGetCardFields();
+    if(d_OK != inRet)
+        return inRet;
+
+	/* BDO: Last 4 PAN digit checking - start -- jzg */
+	inRet = inBDOEnterLast4Digits(FALSE);
+	if(inRet != d_OK)
+			return inRet;
+	/* BDO: Last 4 PAN digit checking - end -- jzg */
+
+	inRet = inCTOS_SelectHost();
+	if(d_OK != inRet)
+		return inRet;
+
+
+	//gcitra - put display here not in amount entry
+		inRet=inCTOS_DisplayCardTitle(6, 7); //Display Issuer logo: re-aligned Issuer label and PAN lines -- jzg
+		if(d_OK != inRet)
+			return inRet;
+
+
+		inRet = inCTOS_UpdateTxnTotalAmount();
+		if(d_OK != inRet)
+			return inRet;
+	
+		inRet = inConfirmPAN();
+		if(d_OK != inRet)
+			return inRet;		
+	//gcitra
+
+
+
+	//remove later -- jzg
+	vdDebug_LogPrintf("JEFF::BEFORE TRANSFER T1 DATA [%d]", srTransRec.usTrack1Len);
+	vdDebug_LogPrintf("JEFF::BEFORE TRANSFER T2 DATA [%d]", srTransRec.usTrack2Len);
+	vdDebug_LogPrintf("JEFF::BEFORE TRANSFER T3 DATA [%d]", srTransRec.usTrack3Len);
+
+	
+    if (inMultiAP_CheckMainAPStatus() == d_OK)
+    {
+        
+        inRet = inCTOS_MultiAPSaveData(d_IPC_CMD_ONLINES_SALE);
+        if(d_OK != inRet)
+            return inRet;
+    }
+    else
+    {
+		
+        if (inMultiAP_CheckSubAPStatus() == d_OK)
+        {
+            inRet = inCTOS_MultiAPGetData();
+            if(d_OK != inRet)
+                return inRet;
+            
+            inRet = inCTOS_MultiAPReloadTable();
+            if(d_OK != inRet)
+                return inRet;
+        }
+        inRet = inCTOS_MultiAPCheckAllowd();
+        if(d_OK != inRet)
+            return inRet;
+    }
+
+
+	//remove prompt fro selection-Merchant selection is done by inCTOS_TEMPCheckAndSelectMutipleMID
+	//	  inRet = inCTOS_CheckAndSelectMutipleMID();
+	//	  if(d_OK != inRet)
+	//		  return inRet;
+	inMMTReadRecord(srTransRec.HDTid,srTransRec.MITid);
+
+    inRet = inCTOS_CheckMustSettle();
+    if(d_OK != inRet)
+        return inRet;
+
+/*    inRet = inCTOS_PreConnect();
+    if(d_OK != inRet)
+        return inRet;
+*/
+
+    inRet = inCTOS_CheckIssuerEnable();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_CheckTranAllowd();
+    if(d_OK != inRet)
+        return inRet;
+
+
+    inRet = inCTOS_GetCVV2();
+    if(d_OK != inRet)
+        return inRet;
+
+/*
+    	inRet = inCTOS_CustComputeAndDispTotal();
+    	if(d_OK != inRet)
+        	return inRet;
+*/
+	//gcitra
+	//inRet = inGetPolicyNumber();
+	//if(d_OK != inRet)
+	//	return inRet;	
+	//gcitra
+
+ 
+    inRet = inCTOS_EMVProcessing();
+    if(d_OK != inRet)
+        return inRet;   
+
+		//EMV: Online PIN enchancement - start -- jzg
+#ifdef ONLINE_PIN_SUPPORT
+		srTransRec.fEMVPIN = FALSE;
+		vdDebug_LogPrintf("JEFF::inCTOS_SaleFlowProcess 9F34 = [%02X %02X %02X]", srTransRec.stEMVinfo.T9F34[0], srTransRec.stEMVinfo.T9F34[1], srTransRec.stEMVinfo.T9F34[2]);
+		if((srTransRec.stEMVinfo.T9F34[0] & 0x0F) == 0x02)
+		{
+			inRet = inGetIPPPin();
+			if(d_OK != inRet)
+				 return inRet;
+			else
+				srTransRec.fEMVPIN = TRUE;		
+		}
+#endif
+		//EMV: Online PIN enchancement - end -- jzg
+
+		inRet = inCTOS_PreConnect();
+				if(d_OK != inRet)
+						return inRet;
+
+
+    inRet = inCTOS_GetInvoice();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inBuildAndSendIsoData();
+    if(d_OK != inRet)
+        return inRet;
+
+		vdDebug_LogPrintf("JEFF::strHDT.szTraceNo 2 = [%s]", strHDT.szTraceNo);
+
+    inRet = inCTOS_SaveBatchTxn();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_UpdateAccumTotal();
+    if(d_OK != inRet)
+        return inRet;
+
+		/* BDOCLG-00031: line should be cut if there's no pending advice/ tcupload - start -- jzg  */
+		inRet=inDisconnectIfNoPendingADVICEandUPLOAD(&srTransRec, strHDT.inNumAdv);
+		if(d_OK != inRet)
+			return inRet;
+		/* BDOCLG-00031: line should be cut if there's no pending advice/ tcupload - end -- jzg  */
+		
+	// patrick add code 20141205 start, modified -- sidumili
+	fECRBuildSendOK = TRUE;	
+	if (fECRBuildSendOK){	
+		inRet = inMultiAP_ECRSendSuccessResponse();
+	}
+	// patrick add code 20141205 start, modified -- sidumili
+    
+    inRet = ushCTOS_printReceipt();
+    if(d_OK != inRet)
+        return inRet;
+
+	
+	inCTLOS_Updatepowrfail(PFR_IDLE_STATE);
+	
+		CTOS_LCDTClearDisplay(); //BDO UAT 0012: Merchant copy still being displayed during TC Upload -- jzg
+
+    inRet = inCTOS_EMVTCUpload();
+    if(d_OK != inRet)
+        return inRet;
+    else
+        vdSetErrorMessage("");
+
+	CTOS_LCDTClearDisplay(); //BDO UAT 0012: Merchant copy still being displayed during Advice Upload -- sidumili
+	
+	inRet=inProcessAdviceTrans(&srTransRec, strHDT.inNumAdv);
+    if(d_OK != inRet)
+        return inRet;
+    else
+        vdSetErrorMessage("");
+
+
+	//gcitra
+	inCTOS_CashierLoyalty();
+		if(d_OK != inRet)
+		return inRet;
+	//gcitra
+
+
+    return d_OK;
+}
+
+
+/* Issuer# 000163 - start -- jzg */
+int inGetPolicyNumber(void)
+{
+	USHORT usRet = 0;
+	USHORT usLens;
+	USHORT usMinLen = 1;
+	USHORT usMaxLen = 0;
+	USHORT usInputLine = 6;
+	BYTE baBuf[21+1] = {0};
+
+	if ((srTransRec.HDTid != 1) && (srTransRec.HDTid != 2) && 
+		(srTransRec.HDTid != 22) && /* BDO-00060: Policy number should be per issuer -- jzg */
+		(srTransRec.HDTid != 23) && (srTransRec.HDTid != 24))
+		return d_OK;
+
+	if (strIIT.fGetPolicyNumber == 0) /* BDO-00060: Policy number should be per issuer -- jzg */
+		return d_OK;
+
+	CTOS_LCDTClearDisplay();
+	vdDispTransTitle(SALE);
+
+	memset(srTransRec.szPolicyNumber, 0x00, sizeof(srTransRec.szPolicyNumber));
+
+	CTOS_KBDBufFlush();
+
+	usMaxLen = strIIT.inPolicyNumMaxChar;
+
+	if (usMaxLen >21)
+		usMaxLen = 21;
+
+	setLCDPrint(4, DISPLAY_POSITION_LEFT, "POLICY NO: ");
+	memset(baBuf, 0x00, sizeof(baBuf));     
+
+	while(1)
+	{
+		vduiClearBelow(5);
+		memset(baBuf,0x00, sizeof(baBuf));
+
+        //issue-00256
+		//usRet = InputStringAlpha2(1, usInputLine, 0x00, 0x02, baBuf, &usMaxLen, usMinLen, d_INPUT_TIMEOUT);
+		//usRet = InputString(1, usInputLine, 0x00, 0x02, baBuf, &usMaxLen, usMinLen, d_INPUT_TIMEOUT);	
+		usRet = InputString(1, usInputLine, 0x00, 0x02, baBuf, &usMaxLen, usMinLen, inGetIdleTimeOut(FALSE)); /*BDO: Parameterized idle timeout --sidumili*/
+		
+		if(usRet == d_KBD_ENTER)
+		{
+			if(strlen(baBuf) > 0)
+			{
+				memset(srTransRec.szPolicyNumber, 0, strlen(srTransRec.szPolicyNumber));
+				memcpy(srTransRec.szPolicyNumber, baBuf, strlen(baBuf));
+				break;
+			}
+		}
+		else if (usRet == 0xFF) /*Timeout --sidumili*/
+		{
+			fTimeOutFlag = TRUE; /*BDO: Flag for timeout --sidumili*/
+			return(d_NO);
+			
+		}
+		if(usRet == d_KBD_CANCEL)
+			return d_USER_CANCEL;
+	}
+
+	return d_OK;
+}
+/* Issuer# 000163 - end -- jzg */
+
+
+
+
+
+
+
+int inCTOS_SALE(void)
+{
+	int inRet = d_NO;
+	unsigned char bTC2ndbyte = 0,
+		bTC3rdbyte = 0;
+
+#ifdef ONLINE_PIN_SUPPORT
+	/* POC: 2 dip online pin - start -- jzg*/
+	inEMVRead(2);
+	bTC2ndbyte = strEMVT.szEMVTermCapabilities[1];
+	bTC3rdbyte = strEMVT.szEMVTermCapabilities[2];
+
+	do
+	{
+		CTOS_LCDTClearDisplay();
+		vdCTOS_TxnsBeginInit();
+		
+		inRet = inCTOS_SaleFlowProcess();
+		vdDebug_LogPrintf("JEFF::inCTOS_SaleFlowProcess = [%d]", inRet);
+		if(inRet == ST_RESP_DO_ONLINE_PIN)
+		{
+			inEMVRead(2);
+			strEMVT.szEMVTermCapabilities[1] = 0xF0;
+			strEMVT.szEMVTermCapabilities[2] = 0xC8;
+			inEMVSave(2);
+		}
+		else
+		{
+			inEMVRead(2);
+			strEMVT.szEMVTermCapabilities[1] = bTC2ndbyte;
+			strEMVT.szEMVTermCapabilities[2] = bTC3rdbyte;
+			inEMVSave(2);
+		}
+		vdDebug_LogPrintf("JEFF::szEMVTermCapabilities = [%02X %02X %02X]", strEMVT.szEMVTermCapabilities[0], strEMVT.szEMVTermCapabilities[1], strEMVT.szEMVTermCapabilities[2]);
+		
+		/* Send response to ECR -- sidumili */
+		if (!fECRBuildSendOK){	
+			inMultiAP_ECRSendSuccessResponse();
+		}	
+		fECRBuildSendOK = FALSE;
+		/* Send response to ECR -- sidumili */
+		inCTOS_inDisconnect();
+		vdCTOS_TransEndReset();
+	}
+	while(inRet == ST_RESP_DO_ONLINE_PIN);
+
+	strEMVT.szEMVTermCapabilities[1] = bTC2ndbyte;
+	strEMVT.szEMVTermCapabilities[2] = bTC3rdbyte;
+	inEMVSave(2);
+	/* POC: 2 dip online pin - start -- jzg*/
+#else
+	CTOS_LCDTClearDisplay();
+	
+	vdCTOS_TxnsBeginInit();
+	
+	inRet = inCTOS_SaleFlowProcess();
+	
+	/* Send response to ECR -- sidumili */
+	if (!fECRBuildSendOK){	
+		inMultiAP_ECRSendSuccessResponse();
+	}	
+	fECRBuildSendOK = FALSE;
+	/* Send response to ECR -- sidumili */
+	inCTOS_inDisconnect();
+	
+	vdCTOS_TransEndReset();
+#endif
+
+	
+
+	return inRet;
+}
+

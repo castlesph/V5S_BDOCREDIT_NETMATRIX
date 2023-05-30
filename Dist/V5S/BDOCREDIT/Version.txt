@@ -1,0 +1,28 @@
+//Files Type
+//10 Appl Binary
+//11 Font
+//20 Share Lib
+//21 Share Files
+//22 Appl Data Files
+//24 Appl Lib
+//55 Share Bitmap Files
+//56 Appl Bitmap Files
+//99 System Signed
+
+//Company Name
+COMPANY=CASTLES
+
+//Application Name
+APP_NAME=V5S_BDOCREDIT
+
+//Set To Default Application
+DEFAULT_APP=1
+
+//Appl Binary Version
+10=1400
+//Share Files Version
+21=1400
+//Appl Data Files Version
+22=1400
+//Appl Bitmap Files Version
+56=1400

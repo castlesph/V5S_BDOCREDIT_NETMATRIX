@@ -1,0 +1,802 @@
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <ctosapi.h>
+#include <vwdleapi.h>
+#include <sqlite3.h>
+
+#include "..\Includes\POSTypedef.h"
+#include "..\Debug\Debug.h"
+
+#include "..\Includes\POSMain.h"
+#include "..\Includes\POSTrans.h"
+#include "..\Includes\POSHost.h"
+#include "..\Includes\POSSale.h"
+#include "..\Includes\POSbatch.h"
+#include "..\ui\Display.h"
+#include "..\Includes\V5IsoFunc.h"
+#include "..\Accum\Accum.h"
+#include "..\print\Print.h"
+#include "..\Comm\V5Comm.h"
+#include "..\Includes\MultiApLib.h"
+#include "..\Aptrans\MultiAptrans.h"
+#include "..\Includes\Wub_lib.h"
+#include "..\Database\DatabaseFunc.h"
+#include "..\ApTrans\MultiShareEMV.h"
+#include "..\Includes\CardUtil.h"
+#include "..\Includes\POSSetting.h"
+#include "..\PCI100\COMMS.h"
+
+#include "..\POWRFAIL\POSPOWRFAIL.h"
+
+
+
+#include "POSCtls.h"
+#include "POSWave.h"
+
+int inWaveTransType = 0;
+
+/*sidumili: added */
+extern BOOL fBINVer;
+
+extern BOOL fRouteToSpecificHost;
+
+
+/* BDO: Last 4 PAN digit checking - start -- jzg */
+extern int inBDOEnterLast4Digits(BOOL fInstallment);
+
+/* For ECR -- sidumili */
+extern BOOL fECRBuildSendOK; 
+extern BOOL fTimeOutFlag; /*BDO: Flag for timeout --sidumili*/
+/* For ECR -- sidumili */
+
+void vdCTOSS_SetWaveTransType(int type)
+{
+	inWaveTransType = type;
+}
+
+int inCTOSS_GetWaveTransType(void)
+{
+	return inWaveTransType;
+}
+int inCTOSS_CLMSetCustomEMVTags(void)
+{
+	sqlite3 * dbWave;
+	sqlite3_stmt *stmtWave;
+	int inStmtSeqWave = 0;
+	BYTE baBuf[16+1];
+
+	BYTE buf[100];
+	UINT len;
+	ULONG rtn;
+ 	char setbuf[100];
+	int inlen=0;
+
+	char szName[100+1];
+	char szTag[10+1];
+	char szValue[200+1];
+	char szTagHex[10+1];
+	char szValueHex[200+1];
+	char inbuf[1024];
+	int inBufLen = 0;	
+	int inTaglen = 0;
+	int inValuelen = 0;
+
+	int result;
+	int inResult = d_NO;
+	char *sql = "SELECT szName, szTag, szValue FROM TAGS";
+
+	vdDebug_LogPrintf("inCTOSS_CLMSetCustomEMVTags"); 
+	inCTOSS_CLMOpenAndGetVersion();
+	if (CTLS_EXTERNAL == inCTOSS_GetCtlsMode())
+	{
+		rtn = MsessionAuthenAdmin();
+		vdDebug_LogPrintf("rtn =[%x]........",rtn);
+		if (rtn != d_NO_ERROR) 
+		{
+			vdDisplayErrorMsg(1, 8, "Authen Fail");
+			return ;
+		}
+		
+		rtn = VW_SwitchToAdministrativeMode(d_VW_MODE_ADMIN,baBuf);
+		vdDebug_LogPrintf("rtn =[%x],baBuf=[%s].....",rtn,baBuf);
+	}
+
+	/* open the database */
+	result = sqlite3_open(DB_WAVE,&dbWave);
+	if (result != SQLITE_OK) {
+		sqlite3_close(dbWave);
+		return 1;
+	}
+	
+	sqlite3_exec( dbWave, "begin", 0, 0, NULL );
+	/* prepare the sql, leave stmt ready for loop */
+	result = sqlite3_prepare_v2(dbWave, sql, -1, &stmtWave, NULL);
+	if (result != SQLITE_OK) {
+		sqlite3_close(dbWave);
+		return 2;
+	}
+	
+	inStmtSeqWave = 0;
+
+	/* loop reading each row until step returns anything other than SQLITE_ROW */
+	do {
+		result = sqlite3_step(stmtWave);
+		
+		//vdDebug_LogPrintf("strAIDT.result[%d]AIDid[%d]",result,inSeekCnt);
+		if (result == SQLITE_ROW) { /* can read data */
+			inResult = d_OK;
+			inStmtSeqWave = 0;
+			
+			/* szName*/
+			strcpy((char*)szName, (char *)sqlite3_column_text(stmtWave,inStmtSeqWave));
+			/* szTag*/
+			strcpy((char*)szTag, (char *)sqlite3_column_text(stmtWave,inStmtSeqWave +=1 ));
+			/* szValue*/
+			strcpy((char*)szValue, (char *)sqlite3_column_text(stmtWave,inStmtSeqWave +=1 ));
+
+			vdDebug_LogPrintf("szName=[%s].szTag=[%s].szValue=[%s]",szName, szTag, szValue);
+
+			wub_str_2_hex((unsigned char *)szTag, (unsigned char *)szTagHex, strlen((char *)szTag));
+			wub_str_2_hex((unsigned char *)szValue, (unsigned char *)szValueHex, strlen((char *)szValue));
+
+			inTaglen = strlen((char *)szTag)/2;
+			inValuelen = strlen((char *)szValue)/2;
+			
+			DebugAddHEX("szTagHex", szTagHex, inTaglen);
+			DebugAddHEX("szValueHex", szValueHex, inValuelen);
+
+			inBufLen = 0;
+			memset(inbuf, 0x00, sizeof(inbuf));
+
+			inbuf[inBufLen++] = 0x01;
+
+			if (inTaglen == 1)
+            {
+                inbuf[inBufLen++] = szTag[0];                            
+            }
+            else
+            {
+				memcpy(&inbuf[inBufLen], szTagHex, inTaglen);
+				inBufLen = inBufLen + inTaglen;
+            }
+
+			inbuf[inBufLen++] = inValuelen;
+			
+            if (inValuelen == 1)
+            {
+                    inbuf[inBufLen++] = szValueHex[0];                            
+                    inlen =  inBufLen;
+            }
+            else
+            {
+                    memcpy(&inbuf[inBufLen], szValueHex, inValuelen);                        
+                    inlen =  inBufLen + inValuelen;
+            }
+
+			DebugAddHEX("Set Tag Data1", inbuf, inlen);
+			
+			if (CTLS_INTERNAL == inCTOSS_GetCtlsMode())
+				rtn = EMVCL_SetEMVTags(inbuf, inlen, buf, &len);
+			if (CTLS_EXTERNAL == inCTOSS_GetCtlsMode())
+				rtn = VW_SetEMVTags(inbuf, inlen, buf, &len);
+		
+			DebugAddHEX("Set Tag Data2", inbuf, inlen);
+			vdDebug_LogPrintf("rtn =[%x].inlen=[%d].len=[%d]...",rtn,inlen,len);
+			if(rtn != d_EMVCL_NO_ERROR)
+			{
+				return rtn;
+			}
+			
+ 			if(inlen != len)
+			{
+				return 0xD0000001;
+			}
+			DebugAddHEX("Set Tag Data Resopnse", buf, len);
+		//	if(memcmp(d_SET_TAG, buf, len) != 0)
+			if(memcmp(inbuf, buf, len) != 0)
+			{
+				return 0xD0000002;
+			}
+		}
+	} while (result == SQLITE_ROW);    
+
+	if (CTLS_EXTERNAL == inCTOSS_GetCtlsMode())
+	rtn = VW_SwitchToAdministrativeMode(d_VW_MODE_NORMAL,baBuf);
+	vdDebug_LogPrintf("rtn =[%x],baBuf=[%s].....",rtn,baBuf);
+	
+	vdCTOSS_CLMClose();
+	
+	sqlite3_exec(dbWave,"commit;",NULL,NULL,NULL);
+	//�ر�sqlite����
+	sqlite3_finalize(stmtWave);
+	sqlite3_close(dbWave);
+
+	return(inResult);
+}
+
+/*
+void vdCTOS_InitWaveData(void)
+{
+	vdCTOSS_CLMSetALLCAPK();
+	vdCTOSS_CLMSetAIDAndEMVTag();	
+	inCTOSS_CLMSetCustomEMVTags();
+}
+*/
+
+void vdCTOSS_GetALLWaveSetting(void)
+{
+	BYTE OutRBuf[2048];
+	UINT outLen,rtn;
+	EMVCL_SCHEME_DATA stScheme;
+	EMVCL_CA_PUBLIC_KEY stCAPubKey;
+
+	inCTOSS_CLMOpenAndGetVersion();
+
+	if (CTLS_EXTERNAL == inCTOSS_GetCtlsMode())
+	{
+		rtn = MsessionAuthenAdmin();
+		vdDebug_LogPrintf("rtn =[%x]........",rtn);
+        if (rtn != d_NO_ERROR) 
+		{
+			vdDisplayErrorMsg(1, 8, "Authen Fail");
+			return ;
+        }
+		
+		rtn = VW_SwitchToAdministrativeMode(d_VW_MODE_ADMIN,OutRBuf);
+		vdDebug_LogPrintf("rtn =[%x],baBuf=[%s].....",rtn,OutRBuf);
+	}
+		
+	inCTOSS_CLMGetEMVTag(OutRBuf,&outLen);
+	inCTOSS_CLMVisaGetCapability(&stScheme);
+
+	if (CTLS_EXTERNAL == inCTOSS_GetCtlsMode())
+		rtn = VW_SwitchToAdministrativeMode(d_VW_MODE_NORMAL,OutRBuf);
+		vdDebug_LogPrintf("rtn =[%x],baBuf=[%s].....",rtn,OutRBuf);
+		
+	vdCTOSS_CLMClose();
+		
+	inCTOSS_CLMListAllCAPKID(OutRBuf,&outLen);
+
+	inCTOSS_CLMGetACAPK("\xA0\x00\x00\x00\x03",0x08,&stCAPubKey);
+}
+
+
+
+int inCTOS_MultiAPReloadWaveData(void)
+{
+	if (srTransRec.usChipDataLen > 0)
+	{			
+		vdCTOSS_WaveGetEMVData(srTransRec.baChipData, srTransRec.usChipDataLen);
+	}
+		
+	if (srTransRec.usAdditionalDataLen > 0)
+	{			
+		vdCTOSS_WaveGetEMVData(srTransRec.baAdditionalData, srTransRec.usAdditionalDataLen);
+	}
+	
+	return (d_OK);
+}
+
+int inCTOS_WaveFlowProcess(void)
+{
+    int inRet = d_NO;
+
+    USHORT ushEMVtagLen;
+    BYTE   EMVtagVal[64];
+    BYTE   szStr[64];
+	int inEVENT_ID = 0;
+
+	fECRBuildSendOK = FALSE; /* BDO: For ECR -- sidumili */
+	fTimeOutFlag = FALSE; /*BDO: Flag for timeout --sidumili*/
+	
+	vdCTOS_SetTransType(SALE);
+
+	memset(&stRCDataAnalyze,0x00,sizeof(EMVCL_RC_DATA_ANALYZE));
+    
+    inRet = inCTOSS_CheckMemoryStatus();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_GetTxnPassword();
+    if(d_OK != inRet)
+        return inRet;
+	
+    //SIT-start
+    if (inCTOS_ValidFirstIdleKey() == d_OK){
+        
+		inRet = inCTOS_GetTxnBaseAmount();
+		if(d_OK != inRet)
+			return inRet;
+
+    	if (!fBINVer){
+			inRet = inCTOS_TEMPCheckAndSelectMutipleMID();
+			if(d_OK != inRet)
+				return inRet;
+    	}
+    }else{
+	
+    	if (!fBINVer){
+			inRet = inCTOS_TEMPCheckAndSelectMutipleMID();
+			if(d_OK != inRet)
+				return inRet;
+    	}
+
+		inRet = inCTOS_GetTxnBaseAmount();
+    	if(d_OK != inRet)
+        	return inRet;
+    }
+//SIT-end
+
+		if (fBINVer){
+			inRet = inCTOS_GetCardFields();
+		}
+		else{    
+	    if (strTCT.byCtlsMode == 0)
+				inRet = inCTOS_GetCardFields();
+			else
+	    	inRet = inCTOS_WaveGetCardFields();
+		}
+	
+    if(d_OK != inRet)
+        return inRet;
+
+	/* BDO: Last 4 PAN digit checking - start -- jzg */
+	if (!fBINVer){
+		inRet = inBDOEnterLast4Digits(FALSE);
+		if(inRet != d_OK)
+				return inRet;
+	}
+
+	//gcitra - put display here not in amount entry
+		inRet=inCTOS_DisplayCardTitle(6, 7); //Display Issuer logo: re-aligned Issuer label and PAN lines -- jzg
+		if(d_OK != inRet)
+			return inRet;
+
+		inRet = inCTOS_UpdateTxnTotalAmount();
+		if(d_OK != inRet)
+				return inRet;
+
+		
+	
+		inRet = inConfirmPAN();
+		if(d_OK != inRet)
+			return inRet;
+	//gcitra
+
+//add fleet card processing
+	inRet = inFleetGetLiters();
+	if(d_OK != inRet)
+		return inRet;
+
+	inRet = inFleetSelectProductCode();
+	if(d_OK != inRet)
+		return inRet;
+//end fleet modifications
+
+	inRet=inCTOS_SelectCurrency();
+	if(d_OK != inRet)
+		return inRet;
+
+
+	//inRet = inCTOS_GetCVV2();
+	//if(d_OK != inRet)
+		  //return inRet;
+
+	//gcitra
+	//inRet = inGetPolicyNumber();
+	//if(d_OK != inRet)
+	//	return inRet;	
+	//gcitra
+	
+#define ATPBINROUTE
+#ifdef ATPBINROUTE
+		vdSetATPBinRouteFlag(1);
+		fRouteToSpecificHost = 0;
+		inRet = inCTOSS_ATPBinRoutingProcess();
+		vdDebug_LogPrintf("inCTOSS_ATPBinRoutingProcess inRet=[%d]",inRet);
+		vdSetATPBinRouteFlag(0);
+		if(VS_CONTINUE != inRet)
+			return inRet;
+#endif
+
+
+    inRet = inCTOS_SelectHost();
+    if(d_OK != inRet)
+        return inRet;
+
+
+    if (inMultiAP_CheckMainAPStatus() == d_OK)
+    {
+    	if (srTransRec.byTransType == REFUND)
+				inEVENT_ID = d_IPC_CMD_WAVE_REFUND;
+			else
+				inEVENT_ID = d_IPC_CMD_WAVE_SALE;
+        inRet = inCTOS_MultiAPSaveData(inEVENT_ID);
+        if(d_OK != inRet)
+            return inRet;
+    }
+    else
+    {
+        if (inMultiAP_CheckSubAPStatus() == d_OK)
+        {
+            inRet = inCTOS_MultiAPGetData();
+            if(d_OK != inRet)
+                return inRet;
+            
+            inRet = inCTOS_MultiAPReloadTable();
+            if(d_OK != inRet)
+                return inRet;
+
+			inRet = inCTOS_MultiAPReloadWaveData();
+            if(d_OK != inRet)
+                return inRet;
+        }
+        inRet = inCTOS_MultiAPCheckAllowd();
+        if(d_OK != inRet)
+            return inRet;
+    }
+
+    //inRet = inCTOS_CheckAndSelectMutipleMID();
+    //if(d_OK != inRet)
+    //    return inRet;
+
+	inMMTReadRecord(srTransRec.HDTid,srTransRec.MITid);
+
+    inRet = inCTOS_CheckMustSettle();
+    if(d_OK != inRet)
+        return inRet;
+
+    //if ((fBINVer != VS_TRUE) && (strCPT.inCommunicationMode == GPRS_MODE)){
+/*    inRet = inCTOS_PreConnect();
+    if(d_OK != inRet)
+        return inRet;
+*/
+    //}
+
+    inRet = inCTOS_CheckIssuerEnable();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_CheckTranAllowd();
+    if(d_OK != inRet)
+        return inRet;
+
+
+    inRet = inCTOS_GetCVV2();
+    if(d_OK != inRet)
+        return inRet;
+
+	//gcitra
+	inRet = inGetPolicyNumber();
+	if(d_OK != inRet)
+		return inRet;	
+	//gcitra
+
+
+//0806
+/*
+    inRet = inCTOS_CustComputeAndDispTotal();
+    if(d_OK != inRet)
+        return inRet;
+*/
+//0806
+
+    inRet = inCTOS_EMVProcessing();
+    if(d_OK != inRet)
+        return inRet;   
+
+
+		//EMV: Online PIN enchancement - start -- jzg
+#ifdef ONLINE_PIN_SUPPORT
+		srTransRec.fEMVPIN = FALSE;
+		vdDebug_LogPrintf("JEFF::inCTOS_WaveFlowProcess 9F34 = [%02X %02X %02X]", srTransRec.stEMVinfo.T9F34[0], srTransRec.stEMVinfo.T9F34[1], srTransRec.stEMVinfo.T9F34[2]);
+		if((srTransRec.stEMVinfo.T9F34[0] & 0x0F) == 0x02)
+		{
+			inRet = inGetIPPPin();
+			if(d_OK != inRet)
+				 return inRet;
+			else
+				srTransRec.fEMVPIN = TRUE;		
+		}
+#endif
+		//EMV: Online PIN enchancement - end -- jzg
+
+
+		inRet = inCTOS_PreConnect();
+				if(d_OK != inRet)
+						return inRet;
+
+
+    inRet = inCTOS_GetInvoice();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inBuildAndSendIsoData();
+    if(d_OK != inRet)			
+    if(d_OK != inRet){
+
+		/*BDO: Set ECR response code to EN - COMM ERROR -- sidumili*/
+		if (strlen(srTransRec.szRespCode) <= 0) 
+			strcpy(srTransRec.szECRRespCode, ECR_COMMS_ERR);
+
+        return inRet;
+    }
+
+    inRet = inCTOS_SaveBatchTxn();
+    if(d_OK != inRet)
+        return inRet;
+
+    inRet = inCTOS_UpdateAccumTotal();
+    if(d_OK != inRet)
+        return inRet;
+
+	inRet=inDisconnectIfNoPendingADVICEandUPLOAD(&srTransRec, strHDT.inNumAdv);
+    if(d_OK != inRet)
+        return inRet;
+	
+	// patrick add code 20141205 start, modified -- sidumili
+	fECRBuildSendOK = TRUE;	
+	if (fECRBuildSendOK){	
+	    inRet = inMultiAP_ECRSendSuccessResponse();
+	}
+	// patrick add code 20141205 start, modified -- sidumili
+	
+    //if(d_OK != inRet)
+    //    return inRet;
+    inRet = ushCTOS_printReceipt();
+		
+    if(d_OK != inRet)
+        return inRet;
+
+		
+    inCTLOS_Updatepowrfail(PFR_IDLE_STATE);
+
+		CTOS_LCDTClearDisplay(); //BDO UAT 0012: Merchant copy still being displayed during TC Upload -- jzg
+		
+    inRet = inCTOS_EMVTCUpload();
+    if(d_OK != inRet)
+        return inRet;
+    else
+        vdSetErrorMessage("");
+
+		CTOS_LCDTClearDisplay(); //BDO UAT 0012: Merchant copy still being displayed during Advice Upload -- sidumili
+
+
+    if (srTransRec.byTransType == SALE_TIP)	
+    {
+       inRet=inProcessAdviceTrans(&srTransRec, strHDT.inNumAdv);
+       if(d_OK != inRet)
+          return inRet;
+       else
+          vdSetErrorMessage("");
+    }
+
+    return d_OK;
+}
+
+
+int inCTOS_WAVE_SALE(void)
+{
+	int inRet = d_NO;
+	unsigned char bTC2ndbyte = 0,
+		bTC3rdbyte = 0;
+
+#ifdef ONLINE_PIN_SUPPORT
+	/* POC: 2 dip online pin - start -- jzg*/
+	inEMVRead(2);
+	vdDebug_LogPrintf("JEFF::szEMVTermCapabilities 1 = [%02X %02X %02X]", strEMVT.szEMVTermCapabilities[0], strEMVT.szEMVTermCapabilities[1], strEMVT.szEMVTermCapabilities[2]);
+
+	bTC2ndbyte = strEMVT.szEMVTermCapabilities[1];
+	bTC3rdbyte = strEMVT.szEMVTermCapabilities[2];
+	do
+	{
+		CTOS_LCDTClearDisplay();
+
+		vdCTOS_TxnsBeginInit();
+
+		vdCTOS_SetTransType(SALE);
+		vdCTOSS_SetWaveTransType(1);
+
+		srTransRec.fVoidOffline = CN_FALSE;
+
+		// patrick remark ECR "OUT OF RANGE"
+		//vdCTOSS_GetAmt();
+
+		inRet = inCTOSS_CLMOpenAndGetVersion();
+		if(d_OK != inRet)
+			return inRet;
+
+		//display title
+		vdDispTransTitle(SALE);
+
+		inRet = inCTOS_WaveFlowProcess();
+		vdDebug_LogPrintf("JEFF::inCTOS_WaveFlowProcess = [%d]", inRet);
+		if(inRet == ST_RESP_DO_ONLINE_PIN)
+		{
+			inEMVRead(2);
+			strEMVT.szEMVTermCapabilities[1] = 0xF0;
+			strEMVT.szEMVTermCapabilities[2] = 0xC8;
+			inEMVSave(2);
+
+			/* BDO: Clear the saved first keypress to clear the amount -- jzg */
+			vdSetFirstIdleKey(0);
+		}
+		else
+		{
+			inEMVRead(2);
+			strEMVT.szEMVTermCapabilities[1] = bTC2ndbyte;
+			strEMVT.szEMVTermCapabilities[2] = bTC3rdbyte;
+			inEMVSave(2);
+		}
+		vdDebug_LogPrintf("JEFF::szEMVTermCapabilities 2 = [%02X %02X %02X]", strEMVT.szEMVTermCapabilities[0], strEMVT.szEMVTermCapabilities[1], strEMVT.szEMVTermCapabilities[2]);
+
+
+		vdCTOSS_CLMClose();
+
+		/* Send response to ECR -- sidumili */
+		if (!fECRBuildSendOK){	
+		inMultiAP_ECRSendSuccessResponse();
+		}	
+		fECRBuildSendOK = FALSE;
+		/* Send response to ECR -- sidumili */
+
+		inCTOS_inDisconnect();
+
+		vdCTOS_TransEndReset();
+	}
+	while(inRet == ST_RESP_DO_ONLINE_PIN);
+
+	strEMVT.szEMVTermCapabilities[1] = bTC2ndbyte;
+	strEMVT.szEMVTermCapabilities[2] = bTC3rdbyte;
+	inEMVSave(2);
+	/* POC: 2 dip online pin - start -- jzg*/
+#else
+	CTOS_LCDTClearDisplay();
+	vdCTOS_TxnsBeginInit();
+
+	vdCTOS_SetTransType(SALE);
+
+	srTransRec.fVoidOffline = CN_FALSE;
+
+	vdDispTransTitle(SALE);
+
+
+	if(strTCT.byCtlsMode != NO_CTLS)
+	{
+		vdCTOSS_SetWaveTransType(1);
+		inRet = inCTOSS_CLMOpenAndGetVersion();
+		if(d_OK != inRet)
+			return inRet;
+	}
+
+	inRet = inCTOS_WaveFlowProcess();
+
+	if(strTCT.byCtlsMode != NO_CTLS)
+		vdCTOSS_CLMClose();
+
+	
+	/* Send response to ECR -- sidumili */
+	if (!fECRBuildSendOK){	
+		inMultiAP_ECRSendSuccessResponse();
+	}	
+	fECRBuildSendOK = FALSE;
+	/* Send response to ECR -- sidumili */
+
+	inCTOS_inDisconnect();
+	vdCTOS_TransEndReset();
+#endif
+	
+	return inRet;
+}
+
+
+
+int inCTOS_WAVE_REFUND(void)
+{
+    int inRet = d_NO;
+
+    CTOS_LCDTClearDisplay();
+
+    vdCTOS_TxnsBeginInit();
+
+	vdCTOS_SetTransType(REFUND);
+	vdCTOSS_SetWaveTransType(1);
+
+	vdCTOSS_GetAmt();
+
+	inRet = inCTOSS_CLMOpenAndGetVersion();
+	if(d_OK != inRet)
+        return inRet;
+	//display title
+    vdDispTransTitle(REFUND);
+
+    inRet = inCTOS_WaveFlowProcess();
+
+	vdCTOSS_CLMClose();
+
+    inCTOS_inDisconnect();
+
+    vdCTOS_TransEndReset();
+
+    return inRet;
+}
+
+
+
+void vdCTOS_InitWaveData(void)
+{
+	BYTE bInBuf[250];
+	BYTE bOutBuf[250];
+	BYTE *ptr = NULL;
+	USHORT usInLen = 0;
+	USHORT usOutLen = 0;
+	USHORT usResult;
+	int inCTLSmode = 0;
+	
+	inCTLSmode = inCTOSS_GetCtlsMode();
+	if (NO_CTLS == inCTLSmode)
+		return;
+
+	//Open the Back Light in the LCD Display //
+	vduiKeyboardBackLight(VS_TRUE);
+	vduiLightOn();
+	CTOS_LCDTClearDisplay();
+    vdDispTitleString((BYTE *)"CONTACTLESS");
+	setLCDPrint(5, DISPLAY_POSITION_LEFT, "CONFIGURE READER...");
+	
+	memset(bOutBuf, 0x00, sizeof(bOutBuf));
+	memset(bInBuf, 0x00, sizeof(bInBuf));
+	
+	vdDebug_LogPrintf("d_IPC_CMD_EMV_WAVESETTAGS usInLen[%d],inCTLSmode=[%d],GetCtlsMode=[%d] ",usInLen,inCTLSmode,inCTOSS_GetCtlsMode());
+/*
+	if(strTCT.byPinPadMode == 0)
+	{
+		if(strTCT.byPinPadType == 3 && CTLS_V3_SHARECTLS == inCTLSmode)
+		{
+			char szV3PSendBuf[1024+1];
+			int inOffSet = 0;
+			int status;
+			char szRecvBuf[1024+1];
+			int inRecvlen = 0;
+			unsigned char *pszPtr;
+			
+			vdCTOSS_SetV3PRS232Port(strTCT.byPinPadPort);
+			inCTOSS_V3PRS232Open(strTCT.inPPBaudRate, 'N', 8, 1);
+
+			// send STX INJECT_KEY ETX LRC
+			memset(szV3PSendBuf, 0x00, sizeof(szV3PSendBuf));
+			inOffSet = 0;
+			szV3PSendBuf[inOffSet] = STX;
+			inOffSet += 1;
+			memcpy(&szV3PSendBuf[inOffSet], "INIT_WAVE", strlen("INIT_WAVE"));
+			inOffSet += strlen("INIT_WAVE");
+			szV3PSendBuf[inOffSet] = ETX;
+			inOffSet += 1;			
+			szV3PSendBuf[inOffSet] = (char) wub_lrc(&(szV3PSendBuf[1]), inOffSet-1);
+			inOffSet += 1;
+			inCTOSS_V3PRS232SendBuf(szV3PSendBuf, inOffSet);	
+			status = inCTOSS_V3PRS232RecvACK(szRecvBuf, &inRecvlen, (d_CEPAS_READ_BALANCE_CARD_PRESENT_TIMEOUT));						
+
+			//inCTOSS_USBHostCloseEx();
+			inCTOSS_V3PRS232Close();
+			return ;
+		}
+	}
+*/
+	if (CTLS_INTERNAL == inCTLSmode || CTLS_EXTERNAL == inCTLSmode)
+	{
+		usResult = inMultiAP_RunIPCCmdTypes("SHARLS_EMV", d_IPC_CMD_EMV_WAVESETTAGS, bInBuf, usInLen, bOutBuf, &usOutLen);
+	}
+
+	if (CTLS_V3_SHARECTLS == inCTLSmode || CTLS_V3_INT_SHARECTLS == inCTLSmode)
+	{
+		usResult = inMultiAP_RunIPCCmdTypes("SHARLS_CTLS", d_IPC_CMD_EMV_WAVESETTAGS, bInBuf, usInLen, bOutBuf, &usOutLen);
+	}	
+
+}
+
+
+
+

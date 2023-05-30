@@ -1,0 +1,39 @@
+
+#ifndef ISOENGINEE_H
+#define ISOENGINEE_H
+
+
+#define CTOSS_BIT_MAP_MAX_ARRAY    64
+
+#define ISO_DATA_ASC      		1 /* a */
+#define ISO_DATA_BCD      		2
+#define ISO_DATA_NIBBLE_2 		3 /* ..nibble */
+#define ISO_DATA_NIBBLE_3 		4 /* ...nibble */
+#define ISO_DATA_BYTE_2   		5 /* ..ans */
+#define ISO_DATA_BYTE_3   		6 /* ...ans */
+#define ISO_DATA_BYTE_2_H 		7 /* ..ans */
+#define ISO_DATA_BYTE_3_H 		8 /* ...ans */
+#define ISO_DATA_BFD 			99 /* ...BFD */
+
+
+typedef struct
+{
+    int (*inPackMTI)(int , unsigned char *, char *);
+    int (*inPackPCode)(int , unsigned char *, char *);
+    void (*vdModifyBitMap)(int , int *);
+    int (*inCheckISOHeader)(char *, char *);
+    int (*inTransAnalyse)(void);
+    int (*inAdviceAnalyse)(int);
+} ISO_FUNC_TABLE;
+
+
+int inCTOSS_PackIsoData(int inHDTid, unsigned char *szTPDU, unsigned char *uszSendData, int inTransCode);
+int inCTOSS_UnPackIsodata(int inHDTid, unsigned char* uszSendData, int inSendLen, unsigned char *uszReceData, int inReceLen);
+int inCTOSS_CheckBitmapSetBit(BYTE bit);
+void vdCTOSS_SetBitMapOff(int *inTransBitMap, int inBit);
+void vdCTOSS_SetBitMapOn(int *inTransBitMap, int inBit);
+
+#endif
+
+
+
